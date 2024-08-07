@@ -13,7 +13,12 @@ from tqdm import tqdm
 import datasets
 import torch
 from torch.utils.data import Dataset
-from datasets import DatasetDict, concatenate_datasets, load_dataset, IterableDatasetDict
+from datasets import (
+    DatasetDict,
+    concatenate_datasets,
+    load_dataset,
+    IterableDatasetDict,
+)
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
@@ -30,17 +35,21 @@ from transformers import (
     get_scheduler,
     set_seed,
 )
-from transformers.models.wav2vec2.modeling_wav2vec2 import _compute_mask_indices, _sample_negative_indices
+from transformers.models.wav2vec2.modeling_wav2vec2 import (
+    _compute_mask_indices,
+    _sample_negative_indices,
+)
 from transformers.utils import get_full_repo_name
 import time
-
 
 
 logger = get_logger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Finetune a transformers model on a text classification task")
+    parser = argparse.ArgumentParser(
+        description="Finetune a transformers model on a text classification task"
+    )
     parser.add_argument(
         "--train_datasets",
         nargs="+",
@@ -104,7 +113,7 @@ def parse_args():
     parser.add_argument(
         "--load_from_pretrained",
         action="store_true",
-        help="Whether to load pretrained model from model_name_or_path."
+        help="Whether to load pretrained model from model_name_or_path.",
     )
 
     parser.add_argument(
@@ -126,8 +135,15 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.0, help="Weight decay to use."
+    )
+    parser.add_argument(
+        "--num_train_epochs",
+        type=int,
+        default=3,
+        help="Total number of training epochs to perform.",
+    )
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -150,13 +166,27 @@ def parse_args():
         type=SchedulerType,
         default="linear",
         help="The scheduler type to use.",
-        choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
+        choices=[
+            "linear",
+            "cosine",
+            "cosine_with_restarts",
+            "polynomial",
+            "constant",
+            "constant_with_warmup",
+        ],
     )
     parser.add_argument(
-        "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
+        "--num_warmup_steps",
+        type=int,
+        default=0,
+        help="Number of steps for the warmup in the lr scheduler.",
     )
-    parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
+    parser.add_argument(
+        "--output_dir", type=str, default=None, help="Where to store the final model."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0, help="A seed for reproducible training."
+    )
     parser.add_argument(
         "--max_gumbel_temperature",
         type=float,
@@ -170,7 +200,10 @@ def parse_args():
         help="Minimum temperature for gumbel softmax.",
     )
     parser.add_argument(
-        "--gumbel_temperature_decay", type=float, default=0.999995, help="Decay of gumbel temperature during training."
+        "--gumbel_temperature_decay",
+        type=float,
+        default=0.999995,
+        help="Decay of gumbel temperature during training.",
     )
     parser.add_argument(
         "--max_duration_in_seconds",
@@ -212,15 +245,25 @@ def parse_args():
         help="Epsilon for AdamW optimizer",
     )
 
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument(
-        "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
+        "--push_to_hub",
+        action="store_true",
+        help="Whether or not to push the model to the Hub.",
     )
-    parser.add_argument("--hub_token", type=str, help="The token to use to push to the Model Hub.")
+    parser.add_argument(
+        "--hub_model_id",
+        type=str,
+        help="The name of the repository to keep in sync with the local `output_dir`.",
+    )
+    parser.add_argument(
+        "--hub_token", type=str, help="The token to use to push to the Model Hub."
+    )
     args = parser.parse_args()
 
     if args.push_to_hub:
-        assert args.output_dir is not None, "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
+        assert (
+            args.output_dir is not None
+        ), "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
 
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
@@ -229,7 +272,16 @@ def parse_args():
 
 
 class CustomDataset(Dataset):
-    def __init__(self, files, sep, sr, audio_column_name, duration_column_name, min_duration, max_duration):
+    def __init__(
+        self,
+        files,
+        sep,
+        sr,
+        audio_column_name,
+        duration_column_name,
+        min_duration,
+        max_duration,
+    ):
         self.sep = sep
         self.sr = sr
         self.min_duration = min_duration
@@ -237,7 +289,7 @@ class CustomDataset(Dataset):
         self.audio_column_name = audio_column_name
         self.duration_column_name = duration_column_name
         self.data = self.load_ds(files)
-    
+
     def load_ds(self, all_files):
         li = []
         for filename in all_files:
@@ -252,15 +304,19 @@ class CustomDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.data)
-        
+
     def __getitem__(self, idx):
         item = self.data.iloc[idx]
         batch = {}
         batch["input_values"] = sf.read(item[self.audio_column_name])[0]
 
-        if len(batch["input_values"])//self.sr > self.max_duration:
-            start = np.random.randint(0, len(batch["input_values"]) - self.max_duration * self.sr)
-            batch["input_values"] = batch["input_values"][start : start + int(self.max_duration * self.sr)]
+        if len(batch["input_values"]) // self.sr > self.max_duration:
+            start = np.random.randint(
+                0, len(batch["input_values"]) - self.max_duration * self.sr
+            )
+            batch["input_values"] = batch["input_values"][
+                start : start + int(self.max_duration * self.sr)
+            ]
 
         return batch
 
@@ -299,7 +355,9 @@ class DataCollatorForWav2Vec2Pretraining:
     padding: Union[bool, str] = "longest"
     pad_to_multiple_of: Optional[int] = None
 
-    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+    def __call__(
+        self, features: List[Dict[str, Union[List[int], torch.Tensor]]]
+    ) -> Dict[str, torch.Tensor]:
         # reformat list to dict and set to pytorch format
         batch = self.feature_extractor.pad(
             features,
@@ -311,7 +369,9 @@ class DataCollatorForWav2Vec2Pretraining:
         device = batch["input_values"].device
         batch_size = batch["input_values"].shape[0]
 
-        mask_indices_seq_length = self.model._get_feat_extract_output_lengths(batch["input_values"].shape[-1])
+        mask_indices_seq_length = self.model._get_feat_extract_output_lengths(
+            batch["input_values"].shape[-1]
+        )
         # make sure masked sequence length is a Python scalar
         mask_indices_seq_length = int(mask_indices_seq_length)
 
@@ -329,7 +389,7 @@ class DataCollatorForWav2Vec2Pretraining:
             features_shape,
             self.model.config.mask_time_prob,
             self.model.config.mask_time_length,
-            attention_mask=batch.get("sub_attention_mask")
+            attention_mask=batch.get("sub_attention_mask"),
         )
         # sample negative indices
         sampled_negative_indices = _sample_negative_indices(
@@ -337,8 +397,12 @@ class DataCollatorForWav2Vec2Pretraining:
             self.model.config.num_negatives,
             mask_time_indices=mask_time_indices,
         )
-        batch["mask_time_indices"] = torch.tensor(mask_time_indices, dtype=torch.long, device=device)
-        batch["sampled_negative_indices"] = torch.tensor(sampled_negative_indices, dtype=torch.long, device=device)
+        batch["mask_time_indices"] = torch.tensor(
+            mask_time_indices, dtype=torch.long, device=device
+        )
+        batch["sampled_negative_indices"] = torch.tensor(
+            sampled_negative_indices, dtype=torch.long, device=device
+        )
 
         return batch
 
@@ -374,7 +438,7 @@ def main():
     logger.info(accelerator.state, main_process_only=False)
     if accelerator.is_local_main_process:
         # set up tensorboard if available
-        writer = SummaryWriter(args.output_dir + '/logs', max_queue=5, flush_secs=30)
+        writer = SummaryWriter(args.output_dir + "/logs", max_queue=5, flush_secs=30)
 
     # If passed along, set the training seed now.
     if args.seed is not None:
@@ -384,38 +448,42 @@ def main():
     if accelerator.is_main_process:
         if args.push_to_hub:
             if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
+                repo_name = get_full_repo_name(
+                    Path(args.output_dir).name, token=args.hub_token
+                )
             else:
                 repo_name = args.hub_model_id
             repo = Repository(args.output_dir, clone_from=repo_name)
         elif args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
 
-                
     accelerator.wait_for_everyone()
 
     # Download data
     train_dataset = CustomDataset(
-        args.train_datasets, 
-        sep=args.separator, 
-        audio_column_name=args.audio_column_name, 
+        args.train_datasets,
+        sep=args.separator,
+        audio_column_name=args.audio_column_name,
         duration_column_name=args.duration_column_name,
-        sr=16000, 
-        min_duration=args.min_duration_in_seconds, 
-        max_duration=args.max_duration_in_seconds)
+        sr=16000,
+        min_duration=args.min_duration_in_seconds,
+        max_duration=args.max_duration_in_seconds,
+    )
 
     val_dataset = CustomDataset(
-        args.val_datasets, 
-        sep=args.separator, 
-        audio_column_name=args.audio_column_name, 
+        args.val_datasets,
+        sep=args.separator,
+        audio_column_name=args.audio_column_name,
         duration_column_name=args.duration_column_name,
-        sr=16000, 
-        min_duration=args.min_duration_in_seconds, 
-        max_duration=args.max_duration_in_seconds)
-
+        sr=16000,
+        min_duration=args.min_duration_in_seconds,
+        max_duration=args.max_duration_in_seconds,
+    )
 
     # Load feature_extractor
-    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(args.model_name_or_path)
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+        args.model_name_or_path
+    )
     # only normalized-inputs-training is supported
     if not feature_extractor.do_normalize:
         raise ValueError(
@@ -430,14 +498,15 @@ def main():
             " ``config.feat_extract_norm='layer'"
         )
 
-
     # initialize random model
     model = Wav2Vec2ForPreTraining(config)
     if args.load_from_pretrained is not None:
         try:
             model = model.from_pretrained(args.model_name_or_path)
         except:
-            print("!!!!! Warning: Pretrained model may not exist. Start training from Scratch")
+            print(
+                "!!!!! Warning: Pretrained model may not exist. Start training from Scratch"
+            )
 
     # Activate gradient checkpointing if needed
     if args.gradient_checkpointing:
@@ -445,7 +514,9 @@ def main():
 
     # Define data collator, optimizer and scheduler
     data_collator = DataCollatorForWav2Vec2Pretraining(
-        model=model, feature_extractor=feature_extractor, pad_to_multiple_of=args.pad_to_multiple_of
+        model=model,
+        feature_extractor=feature_extractor,
+        pad_to_multiple_of=args.pad_to_multiple_of,
     )
 
     train_dataloader = DataLoader(
@@ -455,18 +526,18 @@ def main():
         shuffle=True,
         num_workers=16,
         pin_memory=True,
-        prefetch_factor=16
+        prefetch_factor=16,
     )
 
     eval_dataloader = DataLoader(
         val_dataset,
-        collate_fn=data_collator, 
+        collate_fn=data_collator,
         batch_size=args.per_device_eval_batch_size,
-        num_workers=16
+        num_workers=16,
     )
 
     # Optimizer
-    optimizer =  torch.optim.AdamW(
+    optimizer = torch.optim.AdamW(
         list(model.parameters()),
         lr=args.learning_rate,
         betas=[args.adam_beta1, args.adam_beta2],
@@ -482,25 +553,29 @@ def main():
 
     # Prepare everything with our `accelerator`.
     model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader 
+        model, optimizer, train_dataloader, eval_dataloader
     )
     if args.resume:
         print("******Resume checkpoint******")
         accelerator.load_state(args.output_dir)
-        checkpoint = torch.load(os.path.join(args.output_dir, 'latest_checkpoint.pt'), 
-                                map_location="cpu")
-
+        checkpoint = torch.load(
+            os.path.join(args.output_dir, "latest_checkpoint.pt"), map_location="cpu"
+        )
 
     # Train
-    total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = (
+        args.per_device_train_batch_size
+        * accelerator.num_processes
+        * args.gradient_accumulation_steps
+    )
 
     # Scheduler and math around the number of training steps.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
 
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-
 
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
@@ -512,12 +587,15 @@ def main():
         print("num_train_epochs: ", args.num_train_epochs)
 
     # Only show the progress bar once on each machine.
-    completed_steps = checkpoint['completed_steps'] + 1 if args.resume else 0
-    starting_epoch = checkpoint['epoch'] if args.resume else 0
-    progress_bar = tqdm(initial = completed_steps, total = args.max_train_steps, disable=not accelerator.is_local_main_process)
+    completed_steps = checkpoint["completed_steps"] + 1 if args.resume else 0
+    starting_epoch = checkpoint["epoch"] if args.resume else 0
+    progress_bar = tqdm(
+        initial=completed_steps,
+        total=args.max_train_steps,
+        disable=not accelerator.is_local_main_process,
+    )
 
     print(f"******STARTING AT EPOCH {starting_epoch} - STEP {completed_steps}******")
-
 
     for epoch in range(starting_epoch, args.num_train_epochs):
         if accelerator.is_main_process:
@@ -528,7 +606,9 @@ def main():
             num_losses = batch["mask_time_indices"].sum()
             sub_attention_mask = batch.pop("sub_attention_mask", None)
             sub_attention_mask = (
-                sub_attention_mask if sub_attention_mask is not None else torch.ones_like(batch["mask_time_indices"])
+                sub_attention_mask
+                if sub_attention_mask is not None
+                else torch.ones_like(batch["mask_time_indices"])
             )
             percent_masked = num_losses / sub_attention_mask.sum()
 
@@ -551,7 +631,6 @@ def main():
 
             # update step
             if (step + 1) % args.gradient_accumulation_steps == 0:
-
                 # compute grad norm for monitoring
                 scale = (
                     accelerator.scaler._scale.item()
@@ -576,7 +655,8 @@ def main():
 
                 # update gumbel temperature
                 gumbel_temperature = max(
-                    args.max_gumbel_temperature * args.gumbel_temperature_decay**completed_steps,
+                    args.max_gumbel_temperature
+                    * args.gumbel_temperature_decay**completed_steps,
                     args.min_gumbel_temperature,
                 )
                 if hasattr(model, "module"):
@@ -588,22 +668,35 @@ def main():
                 completed_steps += 1
 
             # Log all results
-            if (step + 1) % (args.gradient_accumulation_steps * args.logging_steps) == 0:
+            if (step + 1) % (
+                args.gradient_accumulation_steps * args.logging_steps
+            ) == 0:
                 loss.detach()
                 outputs.contrastive_loss.detach()
                 outputs.diversity_loss.detach()
-                cosine_sim = torch.cosine_similarity(outputs.projected_states, outputs.projected_quantized_states, dim=-1)
-                cosine_sim = cosine_sim[batch["mask_time_indices"].to(torch.bool)].mean()
+                cosine_sim = torch.cosine_similarity(
+                    outputs.projected_states, outputs.projected_quantized_states, dim=-1
+                )
+                cosine_sim = cosine_sim[
+                    batch["mask_time_indices"].to(torch.bool)
+                ].mean()
 
                 if accelerator.state.num_processes > 1:
                     loss = accelerator.gather(loss).sum()
-                    outputs.contrastive_loss = accelerator.gather(outputs.contrastive_loss).sum()
-                    outputs.diversity_loss = accelerator.gather(outputs.diversity_loss).sum()
+                    outputs.contrastive_loss = accelerator.gather(
+                        outputs.contrastive_loss
+                    ).sum()
+                    outputs.diversity_loss = accelerator.gather(
+                        outputs.diversity_loss
+                    ).sum()
                     percent_masked = accelerator.gather(percent_masked).sum()
                     cosine_sim = accelerator.gather(cosine_sim).mean()
 
                 train_logs = {
-                    "step": torch.tensor((step + 1) // args.gradient_accumulation_steps, dtype=torch.int32),
+                    "step": torch.tensor(
+                        (step + 1) // args.gradient_accumulation_steps,
+                        dtype=torch.int32,
+                    ),
                     "loss": (loss * args.gradient_accumulation_steps) / num_losses,
                     "contrast_loss": outputs.contrastive_loss / num_losses,
                     "div_loss": outputs.diversity_loss / num_losses,
@@ -612,7 +705,7 @@ def main():
                     "lr": torch.tensor(lr_scheduler.get_lr()),
                     "temp": torch.tensor(gumbel_temperature),
                     "grad_norm": torch.tensor(grad_norm),
-                    "cosine_sim": cosine_sim * 100
+                    "cosine_sim": cosine_sim * 100,
                 }
                 log_str = ""
                 for k, v in train_logs.items():
@@ -621,28 +714,38 @@ def main():
                 if accelerator.is_local_main_process:
                     progress_bar.write(log_str)
                     for k, v in train_logs.items():
-                        writer.add_scalar('TRAIN' + '/' + k, v, completed_steps)
-                    
+                        writer.add_scalar("TRAIN" + "/" + k, v, completed_steps)
 
             # save model every `args.saving_steps` steps
             if (step + 1) % (args.gradient_accumulation_steps * args.saving_steps) == 0:
-                if (args.push_to_hub and epoch < args.num_train_epochs - 1) or args.output_dir is not None:
+                if (
+                    args.push_to_hub and epoch < args.num_train_epochs - 1
+                ) or args.output_dir is not None:
                     accelerator.wait_for_everyone()
                     unwrapped_model = accelerator.unwrap_model(model)
                     unwrapped_model.save_pretrained(
-                            args.output_dir + f'/saved_model/epoch_{epoch}', is_main_process=accelerator.is_main_process, save_function=accelerator.save
-                        )
+                        args.output_dir + f"/saved_model/epoch_{epoch}",
+                        is_main_process=accelerator.is_main_process,
+                        save_function=accelerator.save,
+                    )
                     if accelerator.is_main_process:
-                        feature_extractor.save_pretrained(args.output_dir + f'/saved_model/epoch_{epoch}')
+                        feature_extractor.save_pretrained(
+                            args.output_dir + f"/saved_model/epoch_{epoch}"
+                        )
                         print("****Saving checkpoint*****")
                         state_dict = {
                             "completed_steps": completed_steps,
-                            "epoch": epoch
+                            "epoch": epoch,
                         }
-                        torch.save(state_dict, os.path.join(args.output_dir, "latest_checkpoint.pt"))
+                        torch.save(
+                            state_dict,
+                            os.path.join(args.output_dir, "latest_checkpoint.pt"),
+                        )
                     accelerator.save_state(args.output_dir)
 
-                if (args.push_to_hub and epoch < args.num_train_epochs - 1) and accelerator.is_main_process:
+                if (
+                    args.push_to_hub and epoch < args.num_train_epochs - 1
+                ) and accelerator.is_main_process:
                     repo.push_to_hub(
                         commit_message=f"Training in progress step {completed_steps}",
                         blocking=False,
@@ -687,29 +790,32 @@ def main():
         if accelerator.is_local_main_process:
             progress_bar.write(log_str)
             for k, v in val_logs.items():
-                writer.add_scalar('VALIDATION' + '/' + k, v, epoch)
-
-            
+                writer.add_scalar("VALIDATION" + "/" + k, v, epoch)
 
         if args.output_dir is not None:
             accelerator.wait_for_everyone()
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_pretrained(
-                    args.output_dir + f'/saved_model/epoch_{epoch}', is_main_process=accelerator.is_main_process, save_function=accelerator.save
-                )
+                args.output_dir + f"/saved_model/epoch_{epoch}",
+                is_main_process=accelerator.is_main_process,
+                save_function=accelerator.save,
+            )
             if accelerator.is_main_process:
-                feature_extractor.save_pretrained(args.output_dir + f'/saved_model/epoch_{epoch}')
+                feature_extractor.save_pretrained(
+                    args.output_dir + f"/saved_model/epoch_{epoch}"
+                )
                 print("****Saving checkpoint*****")
-                state_dict = {
-                    "completed_steps": completed_steps,
-                    "epoch": epoch
-                }
-                torch.save(state_dict, os.path.join(args.output_dir, "latest_checkpoint.pt"))
+                state_dict = {"completed_steps": completed_steps, "epoch": epoch}
+                torch.save(
+                    state_dict, os.path.join(args.output_dir, "latest_checkpoint.pt")
+                )
 
             accelerator.save_state(args.output_dir)
             if accelerator.is_main_process:
                 if args.push_to_hub:
-                    repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
+                    repo.push_to_hub(
+                        commit_message="End of training", auto_lfs_prune=True
+                    )
 
 
 if __name__ == "__main__":
